@@ -28,6 +28,9 @@ spinoff = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
 
+flate2 = "1.0"
+tempfile = "3.6"
+
 [features]
 default = ["llama", "gpt2", "gptj", "bloom", "gptneox", "mpt"]
 

@@ -350,7 +350,7 @@ impl InferenceSession {
         // Remove the corresponding chars from decoded
         let mut decoded_start = self.decoded_tokens.len();
         for id in &deleted_tokens {
-            decoded_start -= model.vocabulary().token(*id as usize).len();
+            decoded_start -= model.tokenizer().token(*id as usize).len();
         }
         let deleted_decoded: Vec<_> = self.decoded_tokens.drain(decoded_start..).collect();
 

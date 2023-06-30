@@ -1,5 +1,6 @@
 **Note**: These models are compressed, with most weights set to zero.
-This makes them tiny, but useless for prediction.
+This makes them tiny. They still exercise the code, but the actual predictions
+will be useless for production.
 
 We ran this code to alter the models:
 

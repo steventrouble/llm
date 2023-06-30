@@ -27,7 +27,7 @@ pub fn load_gz_model<M: KnownModel>(name: &Path, tempdir: &Path) -> M {
     unzip_test_file(name, &model_path);
     llm::load::<M>(
         &model_path,
-        llm::VocabularySource::Model,
+        llm::TokenizerSource::Embedded,
         ModelParameters::default(),
         |_| (),
     )
