@@ -1,4 +1,5 @@
 use ggml::{Buffer, ComputationGraph, Context, Tensor};
+use serde::Serialize;
 use std::{fmt::Display, sync::Arc};
 use thiserror::Error;
 
@@ -289,7 +290,7 @@ impl InferenceSession {
     ) -> Result<(), InferenceError> {
         let beginning_of_sentence = self.n_past == 0;
 
-        let vocab = model.vocabulary();
+        let vocab = model.tokenizer();
         let prompt_tokens = prompt.into().to_tokens(vocab, beginning_of_sentence)?;
 
         if self.n_past + prompt_tokens.len() >= model.context_size() {
@@ -301,16 +302,13 @@ impl InferenceSession {
             for &tk in batch {
                 let should_call_callback = Some(tk) != model.bot_token_id();
 
-                let mut token = match model.vocabulary() {
-                    crate::Vocabulary::Model(_) => model.vocabulary().token(tk as usize).to_vec(),
-                    crate::Vocabulary::External(_) => {
-                        let mut previous_tokens = self.tokens.clone();
-                        previous_tokens.push(tk);
+                let mut token = match model.tokenizer() {
+                    crate::Tokenizer::Embedded(_) => model.tokenizer().token(tk as usize).to_vec(),
+                    crate::Tokenizer::HuggingFace(_) => {
+                        let mut tokens = self.tokens.clone();
+                        tokens.push(tk);
 
-                        let all_tokens = model.vocabulary().decode(previous_tokens, true);
-                        let splitted = all_tokens.split_at(self.decoded_tokens.len());
-
-                        splitted.1.to_vec()
+                        get_newly_decoded_portion_huggingface(model, tokens, &self.decoded_tokens)
                     }
                 };
 
@@ -353,7 +351,7 @@ impl InferenceSession {
         // Remove the corresponding chars from decoded
         let mut decoded_start = self.decoded_tokens.len();
         for id in &deleted_tokens {
-            decoded_start -= model.vocabulary().token(*id as usize).len();
+            decoded_start -= model.tokenizer().token(*id as usize).len();
         }
         let deleted_decoded: Vec<_> = self.decoded_tokens.drain(decoded_start..).collect();
 
@@ -387,16 +385,15 @@ impl InferenceSession {
         if next_token as TokenId == model.eot_token_id() {
             Err(InferenceError::EndOfText)
         } else {
-            let res = match model.vocabulary() {
-                crate::Vocabulary::Model(_) => {
-                    model.vocabulary().token(next_token as usize).to_vec()
+            let res = match model.tokenizer() {
+                crate::Tokenizer::Embedded(_) => {
+                    model.tokenizer().token(next_token as usize).to_vec()
                 }
-                crate::Vocabulary::External(_) => {
-                    let all_tokens = model.vocabulary().decode(self.tokens.clone(), true);
-                    let splitted = all_tokens.split_at(self.decoded_tokens.len());
-
-                    splitted.1.to_vec()
-                }
+                crate::Tokenizer::HuggingFace(_) => get_newly_decoded_portion_huggingface(
+                    model,
+                    self.tokens.clone(),
+                    &self.decoded_tokens,
+                ),
             };
 
             self.decoded_tokens.append(&mut res.clone());
@@ -427,7 +424,7 @@ impl InferenceSession {
             for token_id in &self.tokens {
                 // Buffer the token until it's valid UTF-8, then call the callback.
                 if let Some(tokens) =
-                    token_utf8_buf.push(&model.vocabulary().token(*token_id as usize))
+                    token_utf8_buf.push(&model.tokenizer().token(*token_id as usize))
                 {
                     if let Err(e) = callback(InferenceResponse::SnapshotToken(tokens)) {
                         return Err(InferenceError::UserCallback(Box::new(e)));
@@ -500,14 +497,14 @@ impl InferenceSession {
     ) -> Result<(), TokenizationError> {
         // Implementation based on perplexity example of llama.cpp:
         // https://github.com/ggerganov/llama.cpp/blob/2d5db48371052087a83974abda3767d1aedec598/examples/perplexity/perplexity.cpp#L24
-        let mut tokens = prompt.into().to_tokens(model.vocabulary(), true)?;
+        let mut tokens = prompt.into().to_tokens(model.tokenizer(), true)?;
 
         let mut count = 0;
 
         // TODO: make this handle <n_ctx tokens
         let n_ctx = model.context_size();
         let n_chunk = tokens.len() / n_ctx;
-        let n_vocab = model.vocabulary().len();
+        let n_vocab = model.tokenizer().len();
         let n_batch = parameters.n_batch;
 
         let mut nll = 0.0;
@@ -621,6 +618,22 @@ impl InferenceSession {
 
         Ok(session)
     }
+}
+
+fn get_newly_decoded_portion_huggingface(
+    model: &dyn Model,
+    tokens: Vec<u32>,
+    decoded_tokens: &[u8],
+) -> Vec<u8> {
+    let all_tokens = model.tokenizer().decode(tokens, true);
+    // The bytes here come from a lossily-decoded String, so we need to convert it back to a String
+    // to check if it ends with a replacement character.
+    let all_tokens = unsafe { String::from_utf8_unchecked(all_tokens) };
+    if all_tokens.ends_with('�') {
+        // Return an empty vector: no valid text was generated from this token.
+        return vec![];
+    }
+    all_tokens.as_bytes()[decoded_tokens.len()..].to_vec()
 }
 
 #[derive(Error, Debug)]
@@ -762,7 +775,7 @@ pub struct InferenceRequest<'a> {
 }
 
 /// Statistics about the inference process.
-#[derive(Debug, Clone, Copy)]
+#[derive(Serialize, Debug, Clone, Copy)]
 pub struct InferenceStats {
     /// How long it took to feed the prompt.
     pub feed_prompt_duration: std::time::Duration,
