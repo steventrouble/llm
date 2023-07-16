@@ -218,16 +218,7 @@ impl Prompt<'_> {
                 .iter()
                 .map(|(_, tok)| *tok)
                 .collect(),
-            Self::Tokens(tokens) => {
-                if let Some(t) = tokens
-                    .iter()
-                    .copied()
-                    .find(|t| vocab.token(*t as usize).is_empty())
-                {
-                    return Err(TokenizationError::InvalidTokenId(t));
-                }
-                tokens.to_vec()
-            }
+            Self::Tokens(tokens) => tokens.to_vec(),
         })
     }
 
